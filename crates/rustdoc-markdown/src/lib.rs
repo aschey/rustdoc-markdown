@@ -19,9 +19,9 @@ pub fn build(path: &str) {
     let crate_docs: rustdoc_types::Crate = serde_json::from_str(&json_string).unwrap();
 
     for (id, item) in &crate_docs.index {
-        if item.id == crate_docs.root {
+        if *id == crate_docs.root {
             let res = process_item(&crate_docs, item);
-            println!("{res:?}");
+            println!("{res:#?}");
         }
     }
 }
@@ -101,14 +101,18 @@ fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
                 .map(|(name, ty)| format!("{name}: {}", ty.to_repr()))
                 .collect();
             let inputs = comma_separated(&inputs);
+            let const_ = if func.header.const_ { "const " } else { "" };
             let async_ = if func.header.async_ { "async " } else { "" };
+            let unsafe_ = if func.header.unsafe_ { "unsafe " } else { "" };
             let output = func
                 .decl
                 .output
                 .as_ref()
                 .map(|o| format!(" -> {}", o.to_repr()))
                 .unwrap_or_default();
-            vec![format!("pub {async_}fn {name}({inputs}){output}")]
+            vec![format!(
+                "pub {const_}{unsafe_}{async_}fn {name}({inputs}){output}"
+            )]
         }
         ItemEnum::Trait(_) => todo!(),
         ItemEnum::TraitAlias(_) => todo!(),
@@ -164,14 +168,14 @@ impl ToRepr for Type {
             } => {
                 let lifetime = lifetime
                     .as_ref()
-                    .map(|l| format!("'{l} "))
+                    .map(|l| format!("{l} "))
                     .unwrap_or_default();
                 let mutable = if *mutable {
                     "mut ".to_string()
                 } else {
                     "".to_string()
                 };
-                format!("{lifetime}{mutable}{}", type_.to_repr())
+                format!("&{lifetime}{mutable}{}", type_.to_repr())
             }
             Type::QualifiedPath {
                 name,
@@ -186,9 +190,9 @@ impl ToRepr for Type {
 impl ToRepr for DynTrait {
     fn to_repr(&self) -> String {
         let mut s = "dyn ".to_string();
-        s += &comma_separated(&self.traits);
+        s += &plus_separated(&self.traits);
         if let Some(lifetime) = &self.lifetime {
-            s += &format!(" {lifetime}");
+            s += &format!(" + {lifetime}");
         }
         s
     }
@@ -236,20 +240,6 @@ impl ToRepr for GenericParamDef {
         }
     }
 }
-
-// impl ToRepr for GenericParamDefKind {
-//     fn to_repr(&self) -> String {
-//         match self {
-//             GenericParamDefKind::Lifetime { outlives } => format!("'"),
-//             GenericParamDefKind::Type {
-//                 bounds,
-//                 default,
-//                 synthetic,
-//             } => todo!(),
-//             GenericParamDefKind::Const { type_, default } => todo!(),
-//         }
-//     }
-// }
 
 impl ToRepr for GenericBound {
     fn to_repr(&self) -> String {
@@ -386,15 +376,21 @@ impl ToRepr for TypeBinding {
     fn to_repr(&self) -> String {
         let mut s = self.name.clone();
         let args = self.args.to_repr();
+        if !args.is_empty() {
+            s += &format!(" {args}");
+        }
         let binding = self.binding.to_repr();
-        format!("{s} {args} {binding}")
+        if !binding.is_empty() {
+            s += &format!(" {binding}");
+        }
+        s
     }
 }
 
 impl ToRepr for TypeBindingKind {
     fn to_repr(&self) -> String {
         match self {
-            TypeBindingKind::Equality(term) => term.to_repr(),
+            TypeBindingKind::Equality(term) => format!("= {}", term.to_repr()),
             TypeBindingKind::Constraint(bound) => comma_separated(bound),
         }
     }
