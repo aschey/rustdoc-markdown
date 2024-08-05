@@ -1,0 +1,9 @@
+[package]
+name = "markdown-writer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+linkify = "0.10.0"
+regex = "1.10.6"
+urlencoding = "2.1.3"
