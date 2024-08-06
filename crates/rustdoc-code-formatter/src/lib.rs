@@ -17,6 +17,7 @@ enum CrateRepr {
 
 #[derive(Debug)]
 pub struct ModuleRepr {
+    pub name: String,
     pub functions: Vec<FnRepr>,
     pub structs: Vec<StructRepr>,
     pub traits: Vec<TraitRepr>,
@@ -25,16 +26,19 @@ pub struct ModuleRepr {
 
 #[derive(Debug)]
 pub struct FnRepr {
+    pub name: String,
     pub repr: String,
 }
 
 #[derive(Debug)]
 pub struct StructRepr {
+    pub name: String,
     pub repr: String,
 }
 
 #[derive(Debug)]
 pub struct TraitRepr {
+    pub name: String,
     pub repr: String,
 }
 
@@ -80,6 +84,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Opti
     match &item.inner {
         ItemEnum::Module(module) => {
             let mut repr = ModuleRepr {
+                name: item.name.clone().unwrap(),
                 functions: Vec::new(),
                 structs: Vec::new(),
                 traits: Vec::new(),
@@ -182,7 +187,10 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Opti
                     s
                 }
             };
-            Some(CrateRepr::Struct(StructRepr { repr: struct_repr }))
+            Some(CrateRepr::Struct(StructRepr {
+                name,
+                repr: struct_repr,
+            }))
         }
         ItemEnum::StructField(ty) => {
             let mut vis = item.visibility.to_repr();
@@ -233,7 +241,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Opti
             let func = format!(
                 "{vis}{const_}{unsafe_}{async_}fn {name}{generics}({inputs}){output}{where_clause}"
             );
-            Some(CrateRepr::Fn(FnRepr { repr: func }))
+            Some(CrateRepr::Fn(FnRepr { name, repr: func }))
         }
         ItemEnum::Trait(trait_) => {
             let name = item.name.clone().unwrap();
@@ -269,7 +277,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Opti
                 s += &format!("\n    {item}");
             }
             s += "\n}";
-            Some(CrateRepr::Trait(TraitRepr { repr: s }))
+            Some(CrateRepr::Trait(TraitRepr { name, repr: s }))
         }
         ItemEnum::TraitAlias(_) => todo!(),
         ItemEnum::Impl(_) => todo!(),

@@ -90,6 +90,11 @@ where
         writeln!(self.writer)
     }
 
+    pub fn newlines(&mut self, count: usize) -> io::Result<()> {
+        let n = "\n".repeat(count);
+        write!(self.writer, "{n}")
+    }
+
     fn write_escaped(&mut self, text: &str) -> io::Result<()> {
         let link_finder = LinkFinder::new();
         let mut pos = 0;
@@ -106,5 +111,15 @@ where
 
     fn write_escaped_raw(&mut self, text: &str) -> io::Result<()> {
         write!(self.writer, "{}", SPECIAL_CHAR_RE.replace_all(text, r"\$x"))
+    }
+}
+
+impl<W: io::Write> io::Write for MarkdownWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
     }
 }
