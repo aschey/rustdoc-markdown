@@ -1,11 +1,25 @@
 use std::fmt::{Debug, Display};
 
+use crate::structs::{PrivateField, TupleStructSingle, Unit};
+use crate::traits::Simple;
+use crate::RenamedPlain;
+
 pub fn plain() {}
 
 pub const fn const_fn() {}
 
 pub fn one_arg(x: usize) {
     println!("{}", x);
+}
+
+pub fn struct_arg(s: PrivateField) {
+    println!("{}", s.x);
+}
+
+pub fn fn_arg(f: impl Fn(bool, RenamedPlain) -> bool, mut f_mut: impl FnMut() -> ()) {
+    if f(false, RenamedPlain { x: 9 }) {
+        f_mut();
+    }
 }
 
 pub fn return_slice<'a>(input: &'a [usize]) -> &'a [usize] {
@@ -38,6 +52,22 @@ pub fn generic_bound<T: Sized>(t: T) -> T {
 
 pub fn inferred_lifetime(foo: &'_ usize) -> usize {
     *foo
+}
+
+pub fn outlives<'a, 'b: 'a, 'c: 'b + 'a>(
+    x: &'a bool,
+    y: &'b i128,
+    z: &'c TupleStructSingle,
+) -> usize {
+    if *x && *y > 0 { z.0 } else { 1234 }
+}
+
+pub fn synthetic_arg(t: impl Simple) -> impl Simple {
+    t
+}
+
+pub fn impl_multiple<T>(t: impl Simple + AsRef<T>) -> impl Simple {
+    Unit
 }
 
 pub fn somewhere<T, U>(t: T, u: U)

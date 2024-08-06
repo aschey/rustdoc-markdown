@@ -1,7 +1,7 @@
 use rustdoc_types::{
-    Constant, Crate, DynTrait, Function, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Item, ItemEnum, Path, PolyTrait, StructKind, Term, TraitBoundModifier,
-    Type, TypeBinding, TypeBindingKind, Visibility,
+    Constant, Crate, DynTrait, GenericArg, GenericArgs, GenericBound, GenericParamDef,
+    GenericParamDefKind, Generics, Item, ItemEnum, Path, PolyTrait, StructKind, Term,
+    TraitBoundModifier, Type, TypeBinding, TypeBindingKind, Visibility, WherePredicate,
 };
 
 trait ToRepr {
@@ -20,14 +20,16 @@ pub fn build(path: &str) {
 
     for (id, item) in &crate_docs.index {
         if *id == crate_docs.root {
-            let res = process_item(&crate_docs, item);
+            let res = process_item(&crate_docs, item, false);
             println!("{res:#?}");
         }
     }
 }
 
-fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
-    if item.visibility != Visibility::Public {
+fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<String> {
+    if !(item.visibility == Visibility::Public
+        || (item.visibility == Visibility::Default && allow_non_public))
+    {
         return Vec::new();
     }
     match &item.inner {
@@ -35,7 +37,7 @@ fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
             let mut res = Vec::new();
             for id in &module.items {
                 let item = &crate_docs.index[id];
-                res.push(process_item(crate_docs, item));
+                res.push(process_item(crate_docs, item, allow_non_public));
             }
             res.into_iter().flatten().collect()
         }
@@ -50,34 +52,57 @@ fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
                 .find(|a| *a == "#[non_exhaustive]")
                 .map(|s| s.to_string() + "\n")
                 .unwrap_or_default();
+            let (generics, where_clause) = generics_repr(&struct_.generics);
+            let mut vis = item.visibility.to_repr();
+            if !vis.is_empty() {
+                vis += " ";
+            }
             let struct_repr = match &struct_.kind {
-                StructKind::Unit => format!("pub struct {name}"),
+                StructKind::Unit => format!("{vis}struct {name}{generics}{where_clause}"),
                 StructKind::Tuple(ids) => {
                     let tuple_fields: Vec<_> = ids
                         .iter()
-                        .filter_map(|id| {
-                            id.as_ref().map(|id| {
-                                let item = &crate_docs.index[id];
-                                let processed = process_item(crate_docs, item);
+                        .map(|id| {
+                            if let Some(id) = id {
+                                let mut item = crate_docs.index[id].clone();
+                                // We don't want to show the numeric names for tuples
+                                item.name = None;
+                                let processed = process_item(crate_docs, &item, false);
                                 processed.first().unwrap().to_string()
-                            })
+                            } else {
+                                "_".to_string()
+                            }
                         })
                         .collect();
-                    format!("pub struct {name}({})", comma_separated(&tuple_fields))
+                    format!(
+                        "{vis}struct {name}{generics}({})",
+                        comma_separated(&tuple_fields)
+                    )
                 }
                 StructKind::Plain {
                     fields,
                     fields_stripped,
                 } => {
-                    let mut s = format!("{non_exhaustive}pub struct {name} {{\n");
-                    let fields_processed = fields.iter().map(|id| {
-                        let item = &crate_docs.index[id];
-                        let processed = process_item(crate_docs, item);
-                        let item = processed.first().unwrap().to_string();
-                        item
-                    });
-                    for field in fields_processed {
-                        s += &format!("    {field},\n");
+                    let mut s =
+                        format!("{non_exhaustive}pub struct {name}{generics}{where_clause} {{");
+                    let fields_processed: Vec<_> = fields
+                        .iter()
+                        .map(|id| {
+                            let item = &crate_docs.index[id];
+                            let processed = process_item(crate_docs, item, false);
+                            let item = processed.first().unwrap().to_string();
+                            item
+                        })
+                        .collect();
+
+                    for field in &fields_processed {
+                        s += &format!("\n    {field},");
+                    }
+                    if *fields_stripped {
+                        s += "/* private fields */";
+                    }
+                    if !fields_processed.is_empty() {
+                        s += "\n";
                     }
                     s += "}";
                     s
@@ -86,8 +111,15 @@ fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
             vec![struct_repr]
         }
         ItemEnum::StructField(ty) => {
-            let name = item.name.clone().unwrap();
-            let s = format!("pub {name}: {}", ty.to_repr());
+            let mut vis = item.visibility.to_repr();
+            if !vis.is_empty() {
+                vis += " ";
+            }
+            let s = if let Some(name) = &item.name {
+                format!("{vis}{name}: {}", ty.to_repr())
+            } else {
+                format!("{vis}{}", ty.to_repr())
+            };
             vec![s]
         }
         ItemEnum::Enum(_) => todo!(),
@@ -98,23 +130,68 @@ fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
                 .decl
                 .inputs
                 .iter()
-                .map(|(name, ty)| format!("{name}: {}", ty.to_repr()))
+                .map(|(name, ty)| {
+                    let ty = ty.to_repr();
+                    if name == "self" && ty == "&Self" {
+                        "&self".to_string()
+                    } else if name == "self" && ty == "Self" {
+                        "self".to_string()
+                    } else {
+                        format!("{name}: {ty}")
+                    }
+                })
                 .collect();
             let inputs = comma_separated(&inputs);
             let const_ = if func.header.const_ { "const " } else { "" };
             let async_ = if func.header.async_ { "async " } else { "" };
             let unsafe_ = if func.header.unsafe_ { "unsafe " } else { "" };
+            let (generics, where_clause) = generics_repr(&func.generics);
             let output = func
                 .decl
                 .output
                 .as_ref()
                 .map(|o| format!(" -> {}", o.to_repr()))
                 .unwrap_or_default();
+            let mut vis = item.visibility.to_repr();
+            if !vis.is_empty() {
+                vis += " ";
+            }
             vec![format!(
-                "pub {const_}{unsafe_}{async_}fn {name}({inputs}){output}"
+                "{vis}{const_}{unsafe_}{async_}fn {name}{generics}({inputs}){output}{where_clause}"
             )]
         }
-        ItemEnum::Trait(_) => todo!(),
+        ItemEnum::Trait(trait_) => {
+            let name = item.name.clone().unwrap();
+            let (generics, where_clause) = generics_repr(&trait_.generics);
+            let auto = if trait_.is_auto { "auto " } else { "" };
+            let unsafe_ = if trait_.is_unsafe { "unsafe " } else { "" };
+            let mut vis = item.visibility.to_repr();
+            if !vis.is_empty() {
+                vis += " ";
+            }
+            let mut bounds = plus_separated(&trait_.bounds);
+            if !bounds.is_empty() {
+                bounds = format!(": {bounds}");
+            }
+            let mut s =
+                format!("{vis}{auto}{unsafe_}trait {name}{generics}{bounds}{where_clause} {{");
+
+            let items: Vec<_> = trait_
+                .items
+                .iter()
+                .filter_map(|id| {
+                    let item = &crate_docs.index[id];
+                    let processed = process_item(crate_docs, item, true);
+                    let item = processed.first().cloned();
+                    item
+                })
+                .collect();
+            for item in &items {
+                s += &format!("\n    {item}");
+            }
+            s += "\n}";
+            vec![s]
+        }
         ItemEnum::TraitAlias(_) => todo!(),
         ItemEnum::Impl(_) => todo!(),
         ItemEnum::TypeAlias(_) => todo!(),
@@ -125,12 +202,46 @@ fn process_item(crate_docs: &Crate, item: &Item) -> Vec<String> {
         ItemEnum::Macro(_) => todo!(),
         ItemEnum::ProcMacro(_) => todo!(),
         ItemEnum::Primitive(_) => todo!(),
-        ItemEnum::AssocConst { type_, default } => todo!(),
+        ItemEnum::AssocConst { type_, default } => {
+            let name = item.name.clone().unwrap();
+            let mut s = format!("const {name}: {}", type_.to_repr());
+            if let Some(default) = default {
+                s += &format!(" = {default}");
+            }
+            s += ";";
+
+            vec![s]
+        }
         ItemEnum::AssocType {
             generics,
             bounds,
             default,
-        } => todo!(),
+        } => {
+            let name = item.name.clone().unwrap();
+
+            let (generics, where_clause) = generics_repr(generics);
+            let mut s = format!("type {name}{generics}");
+            if !bounds.is_empty() {
+                s += &format!(" {}", plus_separated(bounds));
+            }
+            if let Some(default) = default {
+                s += &format!(" = {}", default.to_repr());
+            }
+            s += &format!("{where_clause};");
+
+            vec![s]
+        }
+    }
+}
+
+impl ToRepr for Visibility {
+    fn to_repr(&self) -> String {
+        match self {
+            Visibility::Public => "pub".to_string(),
+            Visibility::Default => "".to_string(),
+            Visibility::Crate => "pub(crate)".to_string(),
+            Visibility::Restricted { parent, path } => format!("pub(in {path})"),
+        }
     }
 }
 
@@ -182,19 +293,34 @@ impl ToRepr for Type {
                 args,
                 self_type,
                 trait_,
-            } => todo!(),
+            } => {
+                let mut s = self_type.to_repr();
+                if let Some(trait_) = trait_ {
+                    let trait_ = trait_.to_repr();
+                    if !trait_.is_empty() {
+                        s = format!("<{s} as {trait_}>");
+                    }
+                }
+                let args = args.to_repr();
+                format!("{s}::{name}{args}")
+            }
         }
     }
 }
 
 impl ToRepr for DynTrait {
     fn to_repr(&self) -> String {
-        let mut s = "dyn ".to_string();
-        s += &plus_separated(&self.traits);
+        let mut s = plus_separated(&self.traits);
+        let mut num_items = self.traits.len();
         if let Some(lifetime) = &self.lifetime {
+            num_items += 1;
             s += &format!(" + {lifetime}");
         }
-        s
+        // dyn trait args need parenthesis if there's > 1 value
+        if num_items > 1 {
+            s = format!("({s})");
+        }
+        format!("dyn {s}")
     }
 }
 
@@ -211,9 +337,15 @@ impl ToRepr for PolyTrait {
 
 impl ToRepr for GenericParamDef {
     fn to_repr(&self) -> String {
-        match &self.kind {
+        let kind = match &self.kind {
             GenericParamDefKind::Lifetime { outlives } => {
-                format!("'{}: {}", self.name, plus_separated(outlives))
+                // let mut s = self.name.to_string();
+                if outlives.is_empty() {
+                    "".to_string()
+                } else {
+                    // format!(": {}", plus_separated(outlives))
+                    plus_separated(outlives)
+                }
             }
             GenericParamDefKind::Type {
                 bounds,
@@ -223,7 +355,7 @@ impl ToRepr for GenericParamDef {
                 if *synthetic {
                     "".to_owned()
                 } else {
-                    let mut s = comma_separated(bounds);
+                    let mut s = plus_separated(bounds);
                     if let Some(default) = default {
                         s += &format!(" = {}", default.to_repr());
                     }
@@ -236,6 +368,39 @@ impl ToRepr for GenericParamDef {
                     s += &format!(" = {default}");
                 }
                 s
+            }
+        };
+        let mut s = self.name.clone();
+        if !kind.is_empty() {
+            s += &format!(": {kind}");
+        }
+        s
+    }
+}
+
+impl ToRepr for WherePredicate {
+    fn to_repr(&self) -> String {
+        match self {
+            WherePredicate::BoundPredicate {
+                type_,
+                bounds,
+                generic_params,
+            } => {
+                let mut s = "".to_string();
+                let type_ = type_.to_repr();
+                let bounds = plus_separated(bounds);
+                if !generic_params.is_empty() {
+                    let generic_params = comma_separated(generic_params);
+                    s += &format!("for <{generic_params}>");
+                }
+                format!("{s}{type_}: {bounds}")
+            }
+            WherePredicate::LifetimePredicate { lifetime, outlives } => {
+                let outlives = plus_separated(outlives);
+                format!("{lifetime} {outlives}")
+            }
+            WherePredicate::EqPredicate { lhs, rhs } => {
+                format!("{} = {}", lhs.to_repr(), rhs.to_repr())
             }
         }
     }
@@ -272,6 +437,20 @@ impl ToRepr for GenericBound {
             }
         }
     }
+}
+
+fn generics_repr(generics: &Generics) -> (String, String) {
+    let generic_params = if generics.params.is_empty() {
+        "".to_string()
+    } else {
+        format!("<{}>", comma_separated(&generics.params))
+    };
+    let where_clause = if generics.where_predicates.is_empty() {
+        "".to_string()
+    } else {
+        format!(" where {}", comma_separated(&generics.where_predicates))
+    };
+    (generic_params, where_clause)
 }
 
 impl ToRepr for TraitBoundModifier {
@@ -391,7 +570,7 @@ impl ToRepr for TypeBindingKind {
     fn to_repr(&self) -> String {
         match self {
             TypeBindingKind::Equality(term) => format!("= {}", term.to_repr()),
-            TypeBindingKind::Constraint(bound) => comma_separated(bound),
+            TypeBindingKind::Constraint(bounds) => plus_separated(bounds),
         }
     }
 }
