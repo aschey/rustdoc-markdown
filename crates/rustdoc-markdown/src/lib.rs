@@ -4,11 +4,45 @@ use rustdoc_types::{
     TraitBoundModifier, Type, TypeBinding, TypeBindingKind, Visibility, WherePredicate,
 };
 
+#[derive(Debug)]
+enum CrateRepr {
+    Module(ModuleRepr),
+    Fn(FnRepr),
+    Struct(StructRepr),
+    Trait(TraitRepr),
+    StructField(String),
+    AssocConst(String),
+    AssocType(String),
+}
+
+#[derive(Debug)]
+pub struct ModuleRepr {
+    pub functions: Vec<FnRepr>,
+    pub structs: Vec<StructRepr>,
+    pub traits: Vec<TraitRepr>,
+    pub modules: Vec<ModuleRepr>,
+}
+
+#[derive(Debug)]
+pub struct FnRepr {
+    pub repr: String,
+}
+
+#[derive(Debug)]
+pub struct StructRepr {
+    pub repr: String,
+}
+
+#[derive(Debug)]
+pub struct TraitRepr {
+    pub repr: String,
+}
+
 trait ToRepr {
     fn to_repr(&self) -> String;
 }
 
-pub fn build(path: &str) {
+pub fn build(path: &str) -> Vec<ModuleRepr> {
     let json_path = rustdoc_json::Builder::default()
         .toolchain("nightly")
         .all_features(true)
@@ -18,32 +52,66 @@ pub fn build(path: &str) {
     let json_string = std::fs::read_to_string(json_path).unwrap();
     let crate_docs: rustdoc_types::Crate = serde_json::from_str(&json_string).unwrap();
 
-    for (id, item) in &crate_docs.index {
-        if *id == crate_docs.root {
-            let res = process_item(&crate_docs, item, false);
-            println!("{res:#?}");
-        }
-    }
+    let modules: Vec<_> = crate_docs
+        .index
+        .iter()
+        .filter_map(|(id, item)| {
+            if *id == crate_docs.root {
+                let res = process_item(&crate_docs, item, false);
+                let CrateRepr::Module(module) = res.unwrap() else {
+                    unreachable!()
+                };
+                Some(module)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    modules
 }
 
-fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<String> {
+fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Option<CrateRepr> {
     if !(item.visibility == Visibility::Public
         || (item.visibility == Visibility::Default && allow_non_public))
     {
-        return Vec::new();
+        return None;
     }
     match &item.inner {
         ItemEnum::Module(module) => {
-            let mut res = Vec::new();
+            let mut repr = ModuleRepr {
+                functions: Vec::new(),
+                structs: Vec::new(),
+                traits: Vec::new(),
+                modules: Vec::new(),
+            };
+            // let mut res = Vec::new();
             for id in &module.items {
                 let item = &crate_docs.index[id];
-                res.push(process_item(crate_docs, item, allow_non_public));
+                let item = process_item(crate_docs, item, allow_non_public);
+                if let Some(item) = item {
+                    match item {
+                        CrateRepr::Module(module) => {
+                            repr.modules.push(module);
+                        }
+                        CrateRepr::Fn(func) => {
+                            repr.functions.push(func);
+                        }
+                        CrateRepr::Struct(struct_) => {
+                            repr.structs.push(struct_);
+                        }
+                        CrateRepr::Trait(trait_) => {
+                            repr.traits.push(trait_);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
             }
-            res.into_iter().flatten().collect()
+            Some(CrateRepr::Module(repr))
         }
         ItemEnum::ExternCrate { name, rename } => todo!(),
-        ItemEnum::Import(_) => Vec::new(),
-        ItemEnum::Union(_) => Vec::new(),
+        ItemEnum::Import(_) => None,
+        ItemEnum::Union(_) => todo!(),
         ItemEnum::Struct(struct_) => {
             let name = item.name.clone().unwrap();
             let non_exhaustive = item
@@ -68,7 +136,10 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
                                 // We don't want to show the numeric names for tuples
                                 item.name = None;
                                 let processed = process_item(crate_docs, &item, false);
-                                processed.first().unwrap().to_string()
+                                match processed.unwrap() {
+                                    CrateRepr::StructField(field) => field,
+                                    _ => unreachable!(),
+                                }
                             } else {
                                 "_".to_string()
                             }
@@ -90,8 +161,11 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
                         .map(|id| {
                             let item = &crate_docs.index[id];
                             let processed = process_item(crate_docs, item, false);
-                            let item = processed.first().unwrap().to_string();
-                            item
+
+                            match processed.unwrap() {
+                                CrateRepr::StructField(field) => field,
+                                _ => unreachable!(),
+                            }
                         })
                         .collect();
 
@@ -108,7 +182,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
                     s
                 }
             };
-            vec![struct_repr]
+            Some(CrateRepr::Struct(StructRepr { repr: struct_repr }))
         }
         ItemEnum::StructField(ty) => {
             let mut vis = item.visibility.to_repr();
@@ -120,7 +194,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
             } else {
                 format!("{vis}{}", ty.to_repr())
             };
-            vec![s]
+            Some(CrateRepr::StructField(s))
         }
         ItemEnum::Enum(_) => todo!(),
         ItemEnum::Variant(_) => todo!(),
@@ -156,9 +230,10 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
             if !vis.is_empty() {
                 vis += " ";
             }
-            vec![format!(
+            let func = format!(
                 "{vis}{const_}{unsafe_}{async_}fn {name}{generics}({inputs}){output}{where_clause}"
-            )]
+            );
+            Some(CrateRepr::Fn(FnRepr { repr: func }))
         }
         ItemEnum::Trait(trait_) => {
             let name = item.name.clone().unwrap();
@@ -179,18 +254,22 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
             let items: Vec<_> = trait_
                 .items
                 .iter()
-                .filter_map(|id| {
+                .map(|id| {
                     let item = &crate_docs.index[id];
                     let processed = process_item(crate_docs, item, true);
-                    let item = processed.first().cloned();
-                    item
+                    match processed.unwrap() {
+                        CrateRepr::Fn(func) => func.repr,
+                        CrateRepr::AssocConst(assoc_const) => assoc_const,
+                        CrateRepr::AssocType(assoc_type) => assoc_type,
+                        _ => unreachable!(),
+                    }
                 })
                 .collect();
             for item in &items {
                 s += &format!("\n    {item}");
             }
             s += "\n}";
-            vec![s]
+            Some(CrateRepr::Trait(TraitRepr { repr: s }))
         }
         ItemEnum::TraitAlias(_) => todo!(),
         ItemEnum::Impl(_) => todo!(),
@@ -210,7 +289,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
             }
             s += ";";
 
-            vec![s]
+            Some(CrateRepr::AssocConst(s))
         }
         ItemEnum::AssocType {
             generics,
@@ -229,7 +308,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Vec<
             }
             s += &format!("{where_clause};");
 
-            vec![s]
+            Some(CrateRepr::AssocType(s))
         }
     }
 }
