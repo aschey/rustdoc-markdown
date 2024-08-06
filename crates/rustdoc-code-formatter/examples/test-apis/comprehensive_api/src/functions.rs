@@ -1,11 +1,9 @@
 use std::fmt::{Debug, Display};
 
-use crate::{
-    structs::{PrivateField, TupleStructSingle, Unit},
-    traits::Simple,
-    unions::Basic,
-    RenamedPlain,
-};
+use crate::structs::{PrivateField, TupleStructSingle, Unit};
+use crate::traits::Simple;
+use crate::unions::Basic;
+use crate::RenamedPlain;
 
 pub fn plain() {}
 
@@ -66,11 +64,7 @@ pub fn outlives<'a, 'b: 'a, 'c: 'b + 'a>(
     y: &'b i128,
     z: &'c TupleStructSingle,
 ) -> usize {
-    if *x && *y > 0 {
-        z.0
-    } else {
-        1234
-    }
+    if *x && *y > 0 { z.0 } else { 1234 }
 }
 
 pub fn synthetic_arg(t: impl Simple) -> impl Simple {

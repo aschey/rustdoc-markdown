@@ -301,7 +301,7 @@ fn process_item(crate_docs: &Crate, item: &Item, allow_non_public: bool) -> Opti
             let (generics, where_clause) = generics_repr(generics);
             let mut s = format!("type {name}{generics}");
             if !bounds.is_empty() {
-                s += &format!(" {}", plus_separated(bounds));
+                s += &format!(": {}", plus_separated(bounds));
             }
             if let Some(default) = default {
                 s += &format!(" = {}", default.to_repr());
@@ -432,14 +432,13 @@ impl ToRepr for GenericParamDef {
                 synthetic,
             } => {
                 if *synthetic {
-                    "".to_owned()
-                } else {
-                    let mut s = plus_separated(bounds);
-                    if let Some(default) = default {
-                        s += &format!(" = {}", default.to_repr());
-                    }
-                    s
+                    return "".to_owned();
                 }
+                let mut s = plus_separated(bounds);
+                if let Some(default) = default {
+                    s += &format!(" = {}", default.to_repr());
+                }
+                s
             }
             GenericParamDefKind::Const { type_, default } => {
                 let mut s = format!("const {}", type_.to_repr());
@@ -519,17 +518,15 @@ impl ToRepr for GenericBound {
 }
 
 fn generics_repr(generics: &Generics) -> (String, String) {
-    let generic_params = if generics.params.is_empty() {
-        "".to_string()
-    } else {
-        format!("<{}>", comma_separated(&generics.params))
-    };
-    let where_clause = if generics.where_predicates.is_empty() {
-        "".to_string()
-    } else {
-        format!(" where {}", comma_separated(&generics.where_predicates))
-    };
-    (generic_params, where_clause)
+    let mut generic_params = comma_separated(&generics.params);
+    if !generic_params.is_empty() {
+        generic_params = format!("<{generic_params}>");
+    }
+    let mut where_predicates = comma_separated(&generics.where_predicates);
+    if !where_predicates.is_empty() {
+        where_predicates = format!(" where {where_predicates}");
+    }
+    (generic_params, where_predicates)
 }
 
 impl ToRepr for TraitBoundModifier {
@@ -611,7 +608,11 @@ fn comma_separated<T>(t: &[T]) -> String
 where
     T: ToRepr,
 {
-    t.iter().map(|g| g.to_repr()).collect::<Vec<_>>().join(", ")
+    t.iter()
+        .map(|g| g.to_repr())
+        .filter(|g| !g.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn plus_separated<T>(t: &[T]) -> String
@@ -620,6 +621,7 @@ where
 {
     t.iter()
         .map(|g| g.to_repr())
+        .filter(|g| !g.is_empty())
         .collect::<Vec<_>>()
         .join(" + ")
 }
