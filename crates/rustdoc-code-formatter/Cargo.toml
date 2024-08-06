@@ -1,0 +1,9 @@
+[package]
+name = "rustdoc-code-formatter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustdoc-json = "0.9.2"
+rustdoc-types = "0.28.1"
+serde_json = "1.0.122"

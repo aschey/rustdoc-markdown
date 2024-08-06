@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
-exclude = ["crates/rustdoc-markdown/examples/test-apis/test_api"]
+exclude = ["crates/rustdoc-code-formatter/examples/test-apis/test_api"]
